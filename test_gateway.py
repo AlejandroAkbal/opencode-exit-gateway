@@ -5,7 +5,7 @@ import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from gateway import Gateway, Proxy, StickyPool, make_handler
+from gateway import Gateway, Proxy, StickyPool, filter_free_models, make_handler
 
 
 BODY = json.dumps({"model": "mimo-v2.5-free", "messages": [{"role": "user", "content": "hello"}]}).encode()
@@ -94,6 +94,10 @@ class GatewayContract(unittest.TestCase):
         self.assertEqual(self.post(body=body)[0], 400)
         self.assertEqual(self.a.requests, [])
         self.assertEqual(self.b.requests, [])
+
+    def test_model_catalog_contains_only_free_models(self):
+        catalog = {"object": "list", "data": [{"id": "paid"}, {"id": "mimo-v2.5-free"}]}
+        self.assertEqual(filter_free_models(catalog)["data"], [{"id": "mimo-v2.5-free"}])
 
 
 if __name__ == "__main__":

@@ -90,6 +90,10 @@ class AfterSendError(Exception):
     pass
 
 
+def filter_free_models(catalog):
+    return {**catalog, "data": [model for model in catalog.get("data", []) if str(model.get("id", "")).endswith("-free")]}
+
+
 def _read_head(sock):
     data = bytearray()
     while b"\r\n\r\n" not in data:
@@ -306,7 +310,13 @@ def make_handler(app):
                 return
             try:
                 response, sock, prefix = app.perform("GET", "/zen/v1/models", accept="application/json")
-                return self._relay(response, sock, prefix)
+                try:
+                    if response.status != 200:
+                        return self._relay(response, sock, prefix)
+                    return self._json(200, filter_free_models(json.loads(response.read())))
+                finally:
+                    response.close()
+                    sock.close()
             except Exception:
                 return self._json(503, {"error": {"message": "no healthy upstream exit"}})
 
