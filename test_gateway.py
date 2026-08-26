@@ -115,6 +115,13 @@ class GatewayContract(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(catalog["data"], [{"id": "mimo-v2.5-free"}])
 
+    def test_feed_outage_keeps_working_active_exit(self):
+        active = Proxy("http", "127.0.0.1", 1234, latency=0.1)
+        pool = StickyPool([active])
+        pool.reconcile([])
+        self.assertEqual(pool.current(), active)
+        self.assertEqual(pool.count(), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
