@@ -10,6 +10,7 @@ import socket
 import ssl
 import threading
 import time
+import urllib.parse
 import urllib.request
 import uuid
 from dataclasses import dataclass
@@ -201,15 +202,24 @@ class Gateway:
             "x-opencode-project": "global",
         }
 
-    def perform(self, method, path, body=b"", accept="*/*"):
-        headers = self.upstream_headers(len(body), accept)
+    def perform(self, method, path, body=b"", accept="*/*", host=None, port=None, headers_override=None, use_ssl=None):
+        if host is None:
+            host = self.upstream_host
+        if port is None:
+            port = self.upstream_port
+        if use_ssl is None:
+            use_ssl = self.upstream_tls
+        if headers_override is not None:
+            headers = headers_override
+        else:
+            headers = self.upstream_headers(len(body), accept)
         last = None
         for attempt in range(self.retries + 1):
             proxy = self.pool.current()
             if not proxy:
                 raise BeforeSendError("no healthy exits")
             try:
-                response, sock = request_via(proxy, method, self.upstream_host, self.upstream_port, path, headers, body, self.upstream_tls)
+                response, sock = request_via(proxy, method, host, port, path, headers, body, use_ssl)
                 prefix = response.read1(PEEK_BYTES) if hasattr(response, "read1") else response.read(PEEK_BYTES)
                 blocked = response.status in ELIGIBLE or CHALLENGE.search(prefix)
                 if blocked and attempt < self.retries:
@@ -301,9 +311,53 @@ def make_handler(app):
             sock.close()
             self.close_connection = True
 
+        def _relay_dynamic(self, method):
+            if not self._auth():
+                return
+            target_url = self.headers.get("x-target-url")
+            if not target_url:
+                return self._json(400, {"error": {"message": "x-target-url header required for generic REST relay"}})
+            parsed = urllib.parse.urlparse(target_url)
+            if parsed.scheme not in ("http", "https") or not parsed.netloc:
+                return self._json(400, {"error": {"message": "invalid x-target-url scheme or host"}})
+            host = parsed.hostname
+            port = parsed.port or (443 if parsed.scheme == "https" else 80)
+            use_ssl = (parsed.scheme == "https")
+            path = parsed.path or "/"
+            if parsed.query:
+                path += "?" + parsed.query
+
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+            except ValueError:
+                return self._json(400, {"error": {"message": "invalid content length"}})
+            if length > MAX_BODY:
+                return self._json(413, {"error": {"message": "request body rejected"}})
+            body = self.rfile.read(length) if length > 0 else b""
+
+            headers = {}
+            for k, v in self.headers.items():
+                if k.lower() not in ("host", "authorization", "content-length", "x-target-url", "connection"):
+                    headers[k] = v
+            headers["Host"] = parsed.netloc
+            headers["Content-Length"] = str(len(body))
+
+            try:
+                response, sock, prefix = app.perform(
+                    method, path, body,
+                    host=host, port=port, headers_override=headers, use_ssl=use_ssl
+                )
+                return self._relay(response, sock, prefix)
+            except AfterSendError:
+                return self._json(502, {"error": {"message": "ambiguous upstream failure; request not replayed"}})
+            except Exception:
+                return self._json(503, {"error": {"message": "no healthy upstream exit"}})
+
         def do_GET(self):
             if self.path == "/health":
                 return self._json(200 if app.pool.current() else 503, {"status": "ok" if app.pool.current() else "no_exits", "exits": app.pool.count()})
+            if self.headers.get("x-target-url"):
+                return self._relay_dynamic("GET")
             if self.path != "/v1/models":
                 return self._json(404, {"error": {"message": "not found"}})
             if not self._auth():
@@ -321,6 +375,8 @@ def make_handler(app):
                 return self._json(503, {"error": {"message": "no healthy upstream exit"}})
 
         def do_POST(self):
+            if self.headers.get("x-target-url"):
+                return self._relay_dynamic("POST")
             if self.path != "/v1/chat/completions":
                 return self._json(404, {"error": {"message": "not found"}})
             if not self._auth():
@@ -345,6 +401,18 @@ def make_handler(app):
                 return self._json(502, {"error": {"message": "ambiguous upstream failure; request not replayed"}})
             except Exception:
                 return self._json(503, {"error": {"message": "no healthy upstream exit"}})
+
+        def do_PUT(self):
+            return self._relay_dynamic("PUT")
+
+        def do_DELETE(self):
+            return self._relay_dynamic("DELETE")
+
+        def do_PATCH(self):
+            return self._relay_dynamic("PATCH")
+
+        def do_HEAD(self):
+            return self._relay_dynamic("HEAD")
 
         def log_message(self, *_args):
             return

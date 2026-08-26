@@ -115,6 +115,17 @@ class GatewayContract(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(catalog["data"], [{"id": "mimo-v2.5-free"}])
 
+    def test_generic_rest_relay_passes_through_pool(self):
+        conn = http.client.HTTPConnection(*self.httpd.server_address, timeout=5)
+        headers = {
+            "Authorization": "Bearer secret",
+            "x-target-url": f"http://{self.a.server_address[0]}:{self.a.server_address[1]}/test-rest"
+        }
+        conn.request("GET", "/", headers=headers)
+        res = conn.getresponse()
+        self.assertEqual(res.status, 200)
+        conn.close()
+
     def test_feed_outage_keeps_working_active_exit(self):
         active = Proxy("http", "127.0.0.1", 1234, latency=0.1)
         pool = StickyPool([active])
