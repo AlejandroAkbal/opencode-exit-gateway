@@ -434,8 +434,8 @@ def main():
         except Exception as exc:
             print(f"inventory refresh failed type={type(exc).__name__}", flush=True)
 
-    refresh()
     threading.Thread(target=lambda: _refresh_loop(refresh), daemon=True).start()
+    threading.Thread(target=refresh, daemon=True).start()
     ThreadingHTTPServer(("0.0.0.0", int(os.environ.get("PORT", "8080"))), make_handler(app)).serve_forever()
 
 
