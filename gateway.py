@@ -313,7 +313,7 @@ def make_handler(app):
                 try:
                     if response.status != 200:
                         return self._relay(response, sock, prefix)
-                    return self._json(200, filter_free_models(json.loads(response.read())))
+                    return self._json(200, filter_free_models(json.loads(prefix + response.read())))
                 finally:
                     response.close()
                     sock.close()

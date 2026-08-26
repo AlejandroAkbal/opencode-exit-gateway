@@ -27,7 +27,10 @@ class FakeProxy(socketserver.StreamRequestHandler):
             headers[key.lower()] = value.strip()
         body = self.rfile.read(int(headers.get("content-length", "0")))
         self.server.requests.append((request.decode().strip(), body))
-        if self.server.fail:
+        if request.startswith(b"GET "):
+            payload = b'{"object":"list","data":[{"id":"paid"},{"id":"mimo-v2.5-free"}]}'
+            self.wfile.write(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: " + str(len(payload)).encode() + b"\r\n\r\n" + payload)
+        elif self.server.fail:
             payload = b'{"error":"rate limited"}'
             self.wfile.write(b"HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\nContent-Length: " + str(len(payload)).encode() + b"\r\n\r\n" + payload)
         else:
@@ -74,6 +77,14 @@ class GatewayContract(unittest.TestCase):
         conn.close()
         return result
 
+    def models(self):
+        conn = http.client.HTTPConnection(*self.httpd.server_address, timeout=5)
+        conn.request("GET", "/v1/models", headers={"Authorization": "Bearer secret"})
+        response = conn.getresponse()
+        result = response.status, json.loads(response.read())
+        conn.close()
+        return result
+
     def test_429_is_hidden_exactly_replayed_and_replacement_sticks(self):
         status, _ = self.post()
         self.assertEqual(status, 200)
@@ -98,6 +109,11 @@ class GatewayContract(unittest.TestCase):
     def test_model_catalog_contains_only_free_models(self):
         catalog = {"object": "list", "data": [{"id": "paid"}, {"id": "mimo-v2.5-free"}]}
         self.assertEqual(filter_free_models(catalog)["data"], [{"id": "mimo-v2.5-free"}])
+
+    def test_model_endpoint_filters_after_prefix_inspection(self):
+        status, catalog = self.models()
+        self.assertEqual(status, 200)
+        self.assertEqual(catalog["data"], [{"id": "mimo-v2.5-free"}])
 
 
 if __name__ == "__main__":
